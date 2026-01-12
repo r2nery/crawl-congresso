@@ -1,0 +1,4 @@
+Variable,Switchers,Controls,Std.Diff.Before,Std.Diff.After,Balanced
+gov_loyalty,0.568,0.503,0.511,0.453,❌ Poor
+career_tenure,6.715,6.680,0.005,0.005,✅ Excellent
+n_speeches,214.091,229.397,-0.048,-0.034,✅ Excellent

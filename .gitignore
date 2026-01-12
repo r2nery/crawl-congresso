@@ -1,0 +1,6 @@
+# Virtual environment
+.venv/
+
+# Data files
+*.parquet
+*.pkl

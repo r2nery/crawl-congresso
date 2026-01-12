@@ -1,0 +1,14 @@
+aiohttp==3.13.3
+asyncio==4.0.0
+backports.tarfile==1.2.0
+importlib-metadata==8.0.0
+jaraco.collections==5.1.0
+nltk==3.9.2
+pip-chill==1.0.3
+platformdirs==4.2.2
+scikit-learn==1.8.0
+seaborn==0.13.2
+spacy==3.8.11
+statsmodels==0.14.6
+tomli==2.0.1
+pyarrow
