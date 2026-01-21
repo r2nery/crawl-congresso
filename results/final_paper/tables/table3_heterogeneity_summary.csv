@@ -1,5 +1,5 @@
 Dimension,Measure,Value,p_value,N,Interpretation,p_numeric
-Ideological Distance,Regression β,0.0027,0.712,583,Per 1pt increase in |ΔIdeology|,0.712
-Direction,Rightward - Leftward,0.0265,0.006,154+90,Right-moving vs Left-moving,0.006
-Experience,Junior - Senior,0.0101,0.099,358+233,<5yr vs >10yr tenure,0.099
-Party Size,Major - Minor,-0.0161,0.018,414+157,≥30 deputies vs <10 deputies,0.018
+Ideological Distance,Regression β,-0.0044,0.591,519,Per 1pt increase in |ΔIdeology|,0.591
+Direction,Rightward - Leftward,0.0268,0.025,135+83,Right-moving vs Left-moving,0.025
+Experience,Junior - Senior,0.0089,0.159,297+211,<5yr vs >10yr tenure,0.159
+Party Size,Major - Minor,-0.0159,0.038,360+129,≥30 deputies vs <10 deputies,0.038
