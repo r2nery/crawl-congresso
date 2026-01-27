@@ -252,7 +252,7 @@ df['deputado_id'] = df['deputado_id'].astype(str)
 df['idPartido'] = df['idPartido'].astype(str)
 df['dataHoraInicio'] = pd.to_datetime(df['dataHoraInicio'], utc=True)
 
-CAT_MAP = {0: 'Left', 1: 'Center', 2: 'Rightw}
+CAT_MAP = {0: 'Left', 1: 'Center', 2: 'Right'}
 if pd.api.types.is_numeric_dtype(df['CAT']):
     df['CAT'] = df['CAT'].map(CAT_MAP)
 
@@ -342,6 +342,13 @@ np.random.shuffle(nonswitcher_ids)
 n_ctrl = int(len(nonswitcher_ids) * CFG.control_holdout_ratio)
 control_ids, train_ids = nonswitcher_ids[:n_ctrl], nonswitcher_ids[n_ctrl:]
 df_train = df[df['deputado_id'].isin(train_ids)].copy()
+
+# --- CREATE CONTROL HOLDOUT DATAFRAME (20% NON-SWITCHERS) --------------------
+df_control = df[df['deputado_id'].isin(control_ids)].copy()
+
+# Optional: sanity print
+print(f"Train non-switchers: {len(train_ids)} deputies, {len(df_train):,} speeches")
+print(f"Holdout non-switchers: {len(control_ids)} deputies, {len(df_control):,} speeches")
 
 CORPUS_STATS = {'n_speeches': len(df), 'n_deputies': df['deputado_id'].nunique(),
                 'n_switch_events': len(df_events)}
@@ -652,9 +659,20 @@ tfidf_party = TfidfVectorizer(max_features=CFG.tfidf_max_features, min_df=CFG.tf
 X_train = tfidf_party.fit_transform(df_train[CFG.text_col])
 y_train = df_train['idPartido']
 
+# --- BUILD HOLDOUT FEATURES/LABELS USING SAME VECTORIZER (NO LEAKAGE) --------
+# Ensure text exists
+df_control_eval = df_control.dropna(subset=[CFG.text_col, 'idPartido']).copy()
+
+X_control = tfidf_party.transform(df_control_eval[CFG.text_col])
+y_control = df_control_eval['idPartido']
+
+# Keep a handle for deputy ids (useful for deputy-level accuracy)
+groups_control = df_control_eval['deputado_id'].astype(str).values
+
+print(f"Holdout eval set: {len(y_control):,} speeches from {df_control_eval['deputado_id'].nunique()} deputies")
+
 clf_party = LogisticRegression(class_weight='balanced', C=1.0, max_iter=500, n_jobs=-1, random_state=SEED)
 clf_party.fit(X_train, y_train)
-
 
 groups_train = df_train['deputado_id'].astype(str).values
 
@@ -671,8 +689,6 @@ section2_stats['model_performance'] = {
     'CV Accuracy': f"{cv_acc:.3f} (GroupKFold by deputy, 5 folds)",
     'Training Samples': int(len(y_train))
 }
-
-
 
 PARTY_CLASS_INDICES = {label: idx for idx, label in enumerate(clf_party.classes_)}
 
@@ -874,9 +890,6 @@ print("=" * 95)
 
 # Store results
 REVISION_2A_RESULTS = filtering_steps
-
-# %%
-
 
 # %%
 # CALCULATE LINGUISTIC CORRELATION ============================================
@@ -2493,6 +2506,54 @@ section3_stats['classifier_metrics'] = {
     'f1_by_size': f1_by_size.to_dict()
 }
 
+
+# 7. HOLDOUT (20% NON-SWITCHERS) METRICS --------------------------------------
+print("   Running holdout (20% non-switchers) evaluation...")
+
+# Speech-level holdout accuracy
+y_control_array = np.asarray(y_control)
+y_pred_holdout = clf_party.predict(X_control)
+
+holdout_accuracy = accuracy_score(y_control_array, y_pred_holdout)
+
+# Weighted F1 on holdout
+_, _, holdout_weighted_f1, _ = precision_recall_fscore_support(
+    y_control_array, y_pred_holdout, average='weighted', zero_division=0
+)
+
+# Holdout baseline and improvement (same baseline = 1 / #classes)
+holdout_baseline_accuracy = baseline_accuracy
+holdout_improvement_ratio = holdout_accuracy / holdout_baseline_accuracy
+
+
+print(f"   Holdout accuracy: {holdout_accuracy:.4f}")
+print(f"   Holdout weighted F1: {holdout_weighted_f1:.4f}")
+
+# Deputy-level accuracy (majority vote across that deputy's speeches)
+tmp_hold = pd.DataFrame({
+    'deputado_id': df_control_eval['deputado_id'].astype(str).values,
+    'y_true': y_control_array.astype(str),
+    'y_pred': y_pred_holdout.astype(str)
+})
+
+dep_true = tmp_hold.groupby('deputado_id')['y_true'].agg(lambda s: s.value_counts().index[0])
+dep_pred = tmp_hold.groupby('deputado_id')['y_pred'].agg(lambda s: s.value_counts().index[0])
+
+holdout_deputy_acc = float((dep_true.values == dep_pred.values).mean())
+print(f"   Holdout deputy-level accuracy (majority vote): {holdout_deputy_acc:.4f}")
+
+# Store
+section3_stats['classifier_metrics'].update({
+    'holdout_accuracy': holdout_accuracy,
+    'holdout_weighted_f1': holdout_weighted_f1,
+    'holdout_deputy_level_accuracy': holdout_deputy_acc,
+    'n_holdout': int(len(y_control_array)),
+    'n_holdout_deputies': int(df_control_eval['deputado_id'].nunique()),
+    'holdout_baseline_accuracy': holdout_baseline_accuracy,
+    'holdout_improvement_ratio': holdout_improvement_ratio,
+})
+
+
 print(f"✅ Classifier metrics computed")
 
 # %%
@@ -3596,6 +3657,74 @@ if 'classifier_metrics' in section3_stats and section3_stats['classifier_metrics
     print(f"\nNotes: Metrics from 5-fold cross-validation on training set (N = {cm['n_train']:,} speeches)")
     print(f"       Baseline = uniform random guess across {cm['n_classes']} parties")
     
+    # --- ADD: HOLDOUT (OUT-OF-SAMPLE) METRICS --------------------------------
+    if 'holdout_accuracy' in cm:
+        print("\n" + "-" * 80)
+        print("Holdout (20% non-switchers): Out-of-sample deputy evaluation")
+        print("-" * 80)
+
+        print(f"{'Holdout accuracy (speech-level)':<45} {cm['holdout_accuracy']*100:>10.1f}%")
+        print(f"{'Holdout weighted F1 (speech-level)':<45} {cm['holdout_weighted_f1']:>10.3f}")
+
+        if 'holdout_deputy_level_accuracy' in cm:
+            print(f"{'Holdout accuracy (deputy-level majority vote)':<45} {cm['holdout_deputy_level_accuracy']*100:>10.1f}%")
+
+        if 'n_holdout' in cm and 'n_holdout_deputies' in cm:
+            print(f"\nNotes: Holdout set contains N = {cm['n_holdout']:,} speeches from {cm['n_holdout_deputies']:,} deputies.")
+            print("       Deputies in holdout are never used for classifier training (true out-of-sample test).")
+
+
+        # TABLE 2: CV VS HOLDOUT SUMMARY ==============================================
+    if 'classifier_metrics' in section3_stats and section3_stats['classifier_metrics'].get('status') == 'Complete':
+        cm = section3_stats['classifier_metrics']
+
+        # Only print if holdout metrics exist
+        if all(k in cm for k in ['holdout_accuracy', 'holdout_weighted_f1', 'holdout_deputy_level_accuracy']):
+            print("\n" + "="*80)
+            print("TABLE 2: CLASSIFIER PERFORMANCE (TRAIN CV vs HOLDOUT OOS)")
+            print("="*80)
+            print()
+
+            # Header
+            print(f"{'Dataset':<28} {'Accuracy':>10} {'Weighted F1':>12} {'Deputy Acc':>12} {'N speeches':>12} {'N deputies':>10}")
+            print("-" * 86)
+
+            # TRAIN CV row (speech-level only; deputy acc not defined for CV here)
+            train_n_speeches = cm.get('n_train', np.nan)
+            # n_train in your code is len(y_train) = speeches count, good.
+            train_n_deputies = int(df_train['deputado_id'].nunique()) if 'df_train' in globals() else np.nan
+
+            print(f"{'Training (5-fold CV)':<28} "
+                f"{cm['overall_accuracy']*100:>9.1f}% "
+                f"{cm['weighted_f1']:>12.3f} "
+                f"{'---':>12} "
+                f"{train_n_speeches:>12,} "
+                f"{train_n_deputies:>10,}")
+
+            # HOLDOUT row
+            print(f"{'Holdout (OOS deputies)':<28} "
+                f"{cm['holdout_accuracy']*100:>9.1f}% "
+                f"{cm['holdout_weighted_f1']:>12.3f} "
+                f"{cm['holdout_deputy_level_accuracy']*100:>11.1f}% "
+                f"{cm.get('n_holdout', np.nan):>12,} "
+                f"{cm.get('n_holdout_deputies', np.nan):>10,}")
+
+            print("-" * 86)
+
+            # Optional baseline + improvement if you stored them
+            if 'baseline_accuracy' in cm:
+                base = cm['baseline_accuracy'] * 100
+                train_imp = cm.get('improvement_ratio', np.nan)
+                hold_imp = cm.get('holdout_improvement_ratio', np.nan)
+                print(f"Baseline (uniform random over {cm['n_classes']} parties): {base:.1f}%")
+                if not np.isnan(train_imp):
+                    print(f"Training improvement over baseline: {train_imp:.2f}×")
+                if not np.isnan(hold_imp):
+                    print(f"Holdout improvement over baseline:  {hold_imp:.2f}×")
+
+            print()
+
+
     print("\n" + "="*80)
     print("TABLE 2: TOP 10 PARTIES - CLASSIFICATION PERFORMANCE")
     print("="*80)
@@ -3611,6 +3740,29 @@ if 'classifier_metrics' in section3_stats and section3_stats['classifier_metrics
     
     print("\n")
 
+# TABLE: HOLDOUT (OOS) CLASSIFIER PERFORMANCE =================================
+
+if 'classifier_metrics' in section3_stats and section3_stats['classifier_metrics'].get('holdout_accuracy') is not None:
+    cm = section3_stats['classifier_metrics']
+
+    print("\n" + "="*80)
+    print("TABLE: HOLDOUT (OUT-OF-SAMPLE) CLASSIFIER PERFORMANCE")
+    print("="*80)
+    print()
+
+    print(f"{'Metric':<55} {'Value':>15}")
+    print("-" * 80)
+    print(f"{'Holdout accuracy (speech-level)':<55} {cm['holdout_accuracy']*100:>14.1f}%")
+    print(f"{'Holdout weighted F1 (speech-level)':<55} {cm['holdout_weighted_f1']:>15.3f}")
+    if 'holdout_deputy_level_accuracy' in cm:
+        print(f"{'Holdout accuracy (deputy-level majority vote)':<55} {cm['holdout_deputy_level_accuracy']*100:>14.1f}%")
+    if 'n_holdout' in cm and 'n_holdout_deputies' in cm:
+        print(f"{'Holdout N (speeches)':<55} {cm['n_holdout']:>15,}")
+        print(f"{'Holdout N (deputies)':<55} {cm['n_holdout_deputies']:>15,}")
+    print("-" * 80)
+    print()
+
+
 # =============================================================================
 # TABLE: CLASSIFIER ALGORITHM COMPARISON
 # =============================================================================
@@ -3620,34 +3772,34 @@ if 'classifier_comparison' in section3_stats:
     print("TABLE: CLASSIFIER ALGORITHM COMPARISON")
     print("=" * 90)
     print()
-    
+
     cc = section3_stats['classifier_comparison']
-    
-    print(f"{'Algorithm':<30} {'Accuracy':<15} {'Weighted F1':<15} {'Probability Output':<25}")
-    print("-" * 90)
-    
-    # Order: Logistic Regression first (selected), then others by accuracy
-    order = ['Logistic Regression', 'Linear SVM', 'Multinomial Naive Bayes', 'Random Forest']
-    
-    for name in order:
-        if name in cc:
-            stats = cc[name]
-            acc_str = f"{stats['accuracy_mean']*100:.1f}%"
-            f1_str = f"{stats['weighted_f1']:.3f}"
-            
-            # Mark selected model
-            label = f"{name} (selected)" if name == 'Logistic Regression' else name
-            
-            print(f"{label:<30} {acc_str:<15} {f1_str:<15} {stats['prob_output']:<25}")
-    
-    print("-" * 90)
-    print()
-    print("Notes:")
-    print("   - All classifiers trained on identical TF-IDF features (N = {:,})".format(X_train.shape[0]))
-    print(f"   - {X_train.shape[1]:,} features, 5-fold cross-validation")
-    print("   - Logistic regression selected for native probability calibration")
-    print()
-    print("=" * 90)
+    if cc.get('status') != 'Complete' or 'results' not in cc:
+        print("⚠️  Classifier comparison not complete or missing results.")
+    else:
+        results = cc['results']
+
+        print(f"{'Algorithm':<30} {'Accuracy':<15} {'Weighted F1':<15} {'Probability Output':<25}")
+        print("-" * 90)
+
+        order = ['Logistic Regression', 'Linear SVM', 'Multinomial Naive Bayes', 'Random Forest']
+
+        for name in order:
+            if name in results:
+                stats = results[name]
+                acc_str = f"{stats['accuracy_mean']*100:.1f}%"
+                f1_str = f"{stats['weighted_f1']:.3f}"
+                label = f"{name} (selected)" if name == 'Logistic Regression' else name
+                print(f"{label:<30} {acc_str:<15} {f1_str:<15} {stats.get('prob_output',''): <25}")
+
+        print("-" * 90)
+        print()
+        print("Notes:")
+        print("   - All classifiers trained on identical TF-IDF features (N = {:,})".format(X_train.shape[0]))
+        print(f"   - {X_train.shape[1]:,} features, 5-fold group cross-validation (by deputy)")
+        print("   - Logistic regression selected for native probability calibration")
+        print()
+        print("=" * 90)
 
 
 # TABLE: NAMED ENTITY REMOVAL =================================================
@@ -3927,6 +4079,8 @@ if 'section3_stats' in globals():
         ('Embedding Similarity', section3_stats.get('embedding_robustness', {}).get('diff', np.nan)),
         ('Placebo Test', section3_stats.get('placebo', {}).get('true_effect', np.nan)),
         ('Alternative Outcome', section3_stats.get('alt_outcome', {}).get('peak_effect', np.nan)),
+        ('Classifier Holdout Accuracy (speech-level)', section3_stats.get('classifier_metrics', {}).get('holdout_accuracy', np.nan)),
+        ('Classifier Holdout Accuracy (deputy-level)', section3_stats.get('classifier_metrics', {}).get('holdout_deputy_level_accuracy', np.nan)),
     ]
     
     for check_name, value in checks:
@@ -3938,6 +4092,7 @@ if 'section3_stats' in globals():
             })
     
     df_summary = pd.DataFrame(summary_data)
+    
     print("\n" + df_summary.to_string(index=False))
 
 print("\n" + "="*80)
