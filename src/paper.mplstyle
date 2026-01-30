@@ -1,0 +1,54 @@
+
+# LaTeX rendering
+text.usetex: True
+text.latex.preamble: \usepackage{amsmath}\usepackage{amssymb}\usepackage{bm}
+
+# Fonts - Computer Modern to match LaTeX
+font.family: serif
+font.serif: Computer Modern
+font.size: 10
+axes.labelsize: 10
+axes.titlesize: 10
+xtick.labelsize: 9
+ytick.labelsize: 9
+legend.fontsize: 9
+
+# Figure
+figure.figsize: 5.5, 3.5
+figure.dpi: 150
+figure.autolayout: True
+
+# Axes
+axes.linewidth: 0.5
+axes.spines.top: False
+axes.spines.right: False
+axes.prop_cycle: cycler('color', ['0C5DA5', 'FF2C00', '00B945', 'FF9500', '845B97', '474747', 'C20078'])
+
+# Ticks
+xtick.direction: in
+ytick.direction: in
+xtick.major.width: 0.5
+ytick.major.width: 0.5
+xtick.minor.width: 0.3
+ytick.minor.width: 0.3
+xtick.major.size: 3
+ytick.major.size: 3
+
+# Lines
+lines.linewidth: 1.0
+lines.markersize: 4
+
+# Legend
+legend.frameon: False
+legend.borderaxespad: 0.5
+
+# Grid
+axes.grid: False
+grid.linewidth: 0.3
+grid.alpha: 0.5
+
+# Saving
+savefig.dpi: 300
+savefig.bbox: tight
+savefig.pad_inches: 0.02
+savefig.format: pdf

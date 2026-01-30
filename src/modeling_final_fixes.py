@@ -241,6 +241,113 @@ print("Covariate configuration loaded.")
 print(f"Continuous covariates: {CONTINUOUS_COVARIATES}")
 
 # %%
+# ==============================================================================
+# PUBLICATION-QUALITY FIGURES (NO LATEX REQUIRED)
+# ==============================================================================
+
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import numpy as np
+import os
+
+# ------------------------------------------------------------------------------
+# 1. FIGURE SIZE CONFIGURATION
+# ------------------------------------------------------------------------------
+
+PT = 1./72.27  # Points to inches
+
+LATEX_WIDTHS = {
+    # Standard LaTeX classes
+    'article': 345 * PT,           # ~4.77 inches
+    'article_twocol': 246 * PT,    # ~3.40 inches (single column in two-col)
+    'thesis': 390 * PT,            # ~5.39 inches
+    'beamer': 307 * PT,            # ~4.25 inches
+    
+    # Common journals
+    'nature': 183 * PT,            # 89mm single column
+    'science': 227 * PT,           
+    'pnas_one': 246 * PT,
+    'pnas_two': 510 * PT,
+    
+    # YOUR DOCUMENT - update after measuring with \printlength{\textwidth}
+    'my_paper': 455 * PT,          # <-- UPDATE THIS
+}
+
+GOLDEN = (1 + 5**0.5) / 2  # ~1.618
+
+def figsize(width_key='my_paper', fraction=1.0, aspect=None):
+    """
+    Get figure size matching LaTeX document.
+    
+    Parameters
+    ----------
+    width_key : str or float
+        Key from LATEX_WIDTHS, or width in inches directly
+    fraction : float
+        Fraction of width (e.g., 0.5 for half-width figure)
+    aspect : float
+        Height/width ratio. Default: 1/golden ratio (~0.618)
+    
+    Returns
+    -------
+    tuple : (width, height) in inches
+    """
+    if isinstance(width_key, (int, float)):
+        width = width_key
+    else:
+        width = LATEX_WIDTHS.get(width_key, LATEX_WIDTHS['article'])
+    
+    width *= fraction
+    
+    if aspect is None:
+        aspect = 1 / GOLDEN
+    
+    return (width, width * aspect)
+
+
+# ------------------------------------------------------------------------------
+# 2. STYLE SETUP
+# ------------------------------------------------------------------------------
+
+plt.rcdefaults()
+
+plt.rcParams.update({
+    'text.usetex': False,
+    'mathtext.fontset': 'cm',
+    
+    'font.family': 'serif',
+    'font.serif': ['Times New Roman', 'DejaVu Serif'],
+    'font.size': 10,
+    'axes.labelsize': 10,
+    'axes.titlesize': 10,
+    'xtick.labelsize': 9,
+    'ytick.labelsize': 9,
+    'legend.fontsize': 9,
+    
+    'figure.dpi': 150,
+    'axes.linewidth': 0.5,
+    'axes.spines.top': False,
+    'axes.spines.right': False,
+    
+    'xtick.direction': 'in',
+    'ytick.direction': 'in',
+    'xtick.major.width': 0.5,
+    'ytick.major.width': 0.5,
+    'xtick.major.size': 3,
+    'ytick.major.size': 3,
+    
+    'lines.linewidth': 1.0,
+    'lines.markersize': 5,
+    'legend.frameon': False,
+    
+    'savefig.dpi': 300,
+    'savefig.bbox': 'tight',
+    'savefig.pad_inches': 0.02,
+})
+
+
+
+# %%
 # LOAD DATA ===================================================================
 # =============================================================================
 
@@ -737,6 +844,126 @@ section2_stats['event_study_data'] = {
 }
 
 # %%
+def get_validation_examples(df_es, n_examples=5):
+    """
+    Extract example speeches with high/low P(old party) for qualitative validation.
+    """
+    import pandas as pd
+    
+    results = []
+    
+    # Get switchers with clear pre/post contrast
+    switcher_effects = df_es.groupby('deputado_id').apply(
+        lambda x: pd.Series({
+            'pre_mean': x.loc[x['days_from_switch'] < 0, 'Y_confidence'].mean(),
+            'post_mean': x.loc[x['days_from_switch'] > 0, 'Y_confidence'].mean(),
+            'effect': x.loc[x['days_from_switch'] < 0, 'Y_confidence'].mean() - x.loc[x['days_from_switch'] > 0, 'Y_confidence'].mean(),
+            'old_party_id': x['old_party_id'].iloc[0],
+            'new_party_id': x['new_party_id'].iloc[0],
+            'old_CAT': x['old_CAT'].iloc[0],
+            'new_CAT': x['new_CAT'].iloc[0]
+        })
+    ).dropna()
+    
+    # Select switchers with large effects
+    top_adapters = switcher_effects.nlargest(n_examples * 2, 'effect')
+    
+    for dep_id in top_adapters.index[:n_examples]:
+        dep_data = df_es[df_es['deputado_id'] == dep_id]
+        
+        # High P(old): pre-switch, high confidence
+        pre_speeches = dep_data[dep_data['days_from_switch'] < 0].nlargest(1, 'Y_confidence')
+        # Low P(old): post-switch, low confidence  
+        post_speeches = dep_data[dep_data['days_from_switch'] > 0].nsmallest(1, 'Y_confidence')
+        
+        if len(pre_speeches) > 0 and len(post_speeches) > 0:
+            results.append({
+                'deputado_id': dep_id,
+                'old_party_id': switcher_effects.loc[dep_id, 'old_party_id'],
+                'new_party_id': switcher_effects.loc[dep_id, 'new_party_id'],
+                'old_CAT': switcher_effects.loc[dep_id, 'old_CAT'],
+                'new_CAT': switcher_effects.loc[dep_id, 'new_CAT'],
+                'effect_size': switcher_effects.loc[dep_id, 'effect'],
+                'period': 'pre',
+                'P_old': pre_speeches.iloc[0]['Y_confidence'],
+                'days_from_switch': pre_speeches.iloc[0]['days_from_switch'],
+                'date': pre_speeches.iloc[0]['dataHoraInicio'],
+                'text': pre_speeches.iloc[0]['text_level_1'][:500] if pd.notna(pre_speeches.iloc[0]['text_level_1']) else ''
+            })
+            results.append({
+                'deputado_id': dep_id,
+                'old_party_id': switcher_effects.loc[dep_id, 'old_party_id'],
+                'new_party_id': switcher_effects.loc[dep_id, 'new_party_id'],
+                'old_CAT': switcher_effects.loc[dep_id, 'old_CAT'],
+                'new_CAT': switcher_effects.loc[dep_id, 'new_CAT'],
+                'effect_size': switcher_effects.loc[dep_id, 'effect'],
+                'period': 'post',
+                'P_old': post_speeches.iloc[0]['Y_confidence'],
+                'days_from_switch': post_speeches.iloc[0]['days_from_switch'],
+                'date': post_speeches.iloc[0]['dataHoraInicio'],
+                'text': post_speeches.iloc[0]['text_level_1'][:500] if pd.notna(post_speeches.iloc[0]['text_level_1']) else ''
+            })
+    
+    return pd.DataFrame(results)
+
+
+# ==============================================================================
+# USAGE
+# ==============================================================================
+
+validation_df = get_validation_examples(df_es, n_examples=5)
+validation_df.to_csv('../results/final_paper/classifier_validation_examples.csv', index=False)
+
+print(f"✓ Saved {len(validation_df)} example speeches")
+print("\n" + "="*80)
+print("CLASSIFIER VALIDATION EXAMPLES")
+print("="*80)
+print(validation_df[['old_party_id', 'new_party_id', 'period', 'P_old', 'days_from_switch', 'effect_size']].to_string())
+
+# Show text excerpts
+print("\n" + "="*80)
+print("TEXT EXCERPTS (first 200 chars)")
+print("="*80)
+for _, row in validation_df.iterrows():
+    print(f"\n[{row['period'].upper()}] Deputy {row['deputado_id']} | P(old)={row['P_old']:.3f} | {row['days_from_switch']:.0f} days")
+    print(f"  {row['text'][:200]}...")
+
+
+def get_top_features_by_party(clf, vectorizer, n_features=10):
+    """
+    Extract top predictive words for each party.
+    Returns DataFrame with party, word, weight.
+    """
+    import pandas as pd
+    
+    feature_names = vectorizer.get_feature_names_out()
+    party_list = clf.classes_
+    
+    results = []
+    for i, party in enumerate(party_list):
+        if i < clf.coef_.shape[0]:
+            top_indices = clf.coef_[i].argsort()[-n_features:][::-1]
+            for rank, idx in enumerate(top_indices):
+                results.append({
+                    'party': party,
+                    'rank': rank + 1,
+                    'word': feature_names[idx],
+                    'weight': clf.coef_[i][idx]
+                })
+    
+    return pd.DataFrame(results)
+
+
+# ==============================================================================
+# USAGE
+# ==============================================================================
+
+# Get examples
+validation_df = get_validation_examples(df_es, n_examples=100)
+validation_df.to_csv('../results/final_paper/classifier_validation_examples.csv', index=False)
+print(f"✓ Saved {len(validation_df)} example speeches")
+
+# %%
 # =============================================================================
 # REVISION 2A: SAMPLE FILTERING TABLE
 # =============================================================================
@@ -1188,10 +1415,6 @@ else:
         direction = "higher" if r['included'] > r['excluded'] else "lower"
         print(f"   • {var}: Included switchers have {direction} values (p = {r['p']:.4f})")
 
-if len(marginal_vars) > 0:
-    print(f"\n   {len(marginal_vars)} marginally significant (0.05 ≤ p < 0.10):")
-    for var in marginal_vars:
-        print(f"   • {var} (p = {results_1a[var]['p']:.4f})")
 
 print()
 print("Key selection mechanism:")
@@ -1786,7 +2009,7 @@ else:
 # =============================================================================
 # SECTION 2 REPORT
 # =============================================================================
-def print_full_section2_report(general_stats, dml_data):
+def print_full_section2_report(general_stats, dml_data, save_dir=None):
     print("="*60)
     print("SECTION 2: FULL ANALYSIS REPORT")
     print("="*60)
@@ -1820,61 +2043,31 @@ def print_full_section2_report(general_stats, dml_data):
     print(f"H0: All pre-period effects = 0")
     print(f"F-statistic:     {pt['f_stat']:.3f}")
     print(f"P-value:         {pt['p_value']:.4f}")
+    print("\n")
     
-    # 4. Detailed Regression Output (New Addition)
+    # 4. Detailed Regression Output
     print("--- 4. Detailed Regression Results ---")
-    # Extract coefficients for all time periods
-    time_periods = [-6, -5, -4, -3, -2, 1, 2, 3, 4, 5, 6]
-    print("Period | Coef      | SE       | p-value  | CI Lower  | CI Upper")
-    print("-" * 70)
-
-    for t in time_periods:
-        col_name = f't_{t}'
-        if col_name in results_dml.params.index:
-            coef = results_dml.params[col_name]
-            se = results_dml.bse[col_name]
-            pval = results_dml.pvalues[col_name]
-            ci = results_dml.conf_int().loc[col_name]
-            
-            # Format for significance stars
-            stars = '***' if pval < 0.01 else '**' if pval < 0.05 else '*' if pval < 0.1 else ''
-            
-            print(f"τ = {t:+2d} | {coef:9.4f}{stars:3s} | {se:8.4f} | {pval:8.3f} | {ci[0]:9.4f} | {ci[1]:9.4f}")
-
+    # Assuming 'results_dml' is global or accessible, otherwise pass it as arg
+    # Since it was used in your snippet directly, I assume it's available in scope.
+    if 'results_dml' in globals():
+        time_periods = [-6, -5, -4, -3, -2, 1, 2, 3, 4, 5, 6]
+        print(f"{'Period':<8} | {'Coef':<9} | {'SE':<8} | {'p-value':<8} | {'CI Lower':<9} | {'CI Upper':<9}")
+        print("-" * 75)
+        for t in time_periods:
+            col_name = f't_{t}'
+            if col_name in results_dml.params.index:
+                coef = results_dml.params[col_name]
+                se = results_dml.bse[col_name]
+                pval = results_dml.pvalues[col_name]
+                ci = results_dml.conf_int().loc[col_name]
+                
+                stars = '***' if pval < 0.001 else '**' if pval < 0.01 else '*' if pval < 0.05 else ''
+                
+                print(f"τ = {t:+2d} | {coef:9.4f}{stars:3s} | {se:8.4f} | {pval:8.3f} | {ci[0]:9.4f} | {ci[1]:9.4f}")
+    else:
+        print("(Detailed regression coefficients not available in current scope)")
+    print("\n")
     
-    # 5. Generate Plot
-    print("--- 5. Event Study Plot ---")
-    plot_data = dml_data['plot_data']
-    
-    fig, ax = plt.subplots(figsize=(12,7))
-    ax.axhline(0, color='black', lw=1, alpha=0.5)
-    ax.axvline(-0.5, color='red', ls='--', lw=1.5, label='Switch')
-    ax.axvspan(-6.5,-0.5, alpha=0.1, color='blue')
-    ax.axvspan(-0.5,6.5, alpha=0.1, color='red')
-    
-    # Error bars
-    ax.errorbar(plot_data['time'], plot_data['coef'],
-                yerr=[plot_data['coef']-plot_data['lower'], plot_data['upper']-plot_data['coef']],
-                fmt='o', ms=10, capsize=5, color=COLORS.get('main', 'black'), ecolor='gray', lw=2)
-    
-    # Significant points
-    sig_data = plot_data[plot_data['sig']]
-    if not sig_data.empty:
-        ax.scatter(sig_data['time'], sig_data['coef'], 
-                   c=COLORS.get('sig', 'red'), s=150, zorder=10, edgecolors='white', lw=2)
-    
-    ax.set_xlabel('Bimesters Relative to Switch')
-    ax.set_ylabel('Effect on P(Old Party)')
-    ax.set_title(f'Figure 1: Dynamic Event Study (DML)\nPre-trends p-val: {pt["p_value"]:.3f}', fontweight='bold')
-    ax.set_xticks(plot_data['time'])
-    ax.legend()
-    ax.grid(True, ls=':', alpha=0.6)
-    
-    plt.tight_layout()
-    if 'PLOTS_DIR' in globals():
-        plt.savefig(os.path.join(PLOTS_DIR, 'fig1_event_study.png'), dpi=300, bbox_inches='tight')
-    plt.show()
-    print("="*60)
 
 # Pass both stats dictionaries to the report
 print_full_section2_report(section2_stats, dml_stats)
@@ -2076,7 +2269,7 @@ def print_section2_1_report(stats):
             coef = params[var]
             se = ses[var]
             p = pvals[var]
-            sig = "***" if p < 0.01 else "**" if p < 0.05 else "*" if p < 0.10 else ""
+            sig = "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else ""
             print(f"  {label:<30} {coef:>10.4f}  ({se:.4f}) {sig}")
         
         print(f"  {'N':<30} {m2['n']:>10}")
@@ -2111,6 +2304,97 @@ def print_section2_1_report(stats):
 
 print_section2_1_report(section2_1_stats)
 
+
+
+# %%
+def plot_event_study(dml_data, save_path=None):
+    """
+    Generates the Economist-styled event study plot.
+    """
+    # --- Setup Colors ---
+    # Index 0: Dark Blue (Main data)
+    # Index 4: Red (Switch line/Significance)
+    # Index 1: Light Blue (Secondary)
+    ECONOMIST_COLORS = ['#006BA2', '#3EBCD2', '#379A8B', '#EBB434', '#DB444B']
+    
+    # Map to semantic keys for readability
+    STYLE = {
+        'data': ECONOMIST_COLORS[0],      # Dark Blue
+        'ci':   ECONOMIST_COLORS[0],      # Dark Blue
+        'switch': ECONOMIST_COLORS[4],    # Red
+        'zero': '#444444',                # Dark Gray
+        'grid': '#dcdcdc'                 # Light Gray
+    }
+
+    # --- Prepare Data ---
+    plot_data = dml_data['plot_data']
+    pt = dml_data['pretrends']
+    
+    # Use your figsize utility
+    fig, ax = plt.subplots(figsize=figsize(width_key='my_paper', aspect=0.5))
+    
+    # --- Plotting ---
+    # 1. Zero line
+    ax.axhline(0, color=STYLE['zero'], lw=0.8, alpha=0.8, zorder=1)
+    
+    # 2. Switch line (dashed red)
+    ax.axvline(0, color=STYLE['switch'], ls='--', lw=0.8, 
+               label='Party Switch', zorder=1)
+    
+    # 3. Error Bars & Coefficients
+    # Economist style usually prefers clean lines. We use solid colors for CIs.
+    ax.errorbar(
+        plot_data['time'], 
+        plot_data['coef'],
+        yerr=[plot_data['coef'] - plot_data['lower'], plot_data['upper'] - plot_data['coef']],
+        fmt='o', 
+        ms=3,                    # Marker size
+        color=STYLE['data'],     # Main Blue
+        ecolor=STYLE['ci'],      # Main Blue for bars
+        elinewidth=0.8, 
+        capsize=0,               # Economist style rarely uses caps on error bars
+        lw=0.8,
+        zorder=3,
+        label='Coefficient (95% CI)'
+    )
+    
+    # 4. Highlight Significant Points (Optional: Fill marker with Red if significant)
+    sig_data = plot_data[plot_data['sig']]
+    if not sig_data.empty:
+        ax.scatter(sig_data['time'], sig_data['coef'], 
+                   facecolors=STYLE['switch'], edgecolors=STYLE['switch'], 
+                   s=15, zorder=4, label='Significant (p<0.05)')
+
+    # --- Formatting ---
+    # Economist style: Title usually left-aligned, subtitle distinct (handled via suptitle/title)
+    
+    # Clean up spines (already done in your setup, but reinforcing)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False) # Often y-axis spine is hidden, just ticks
+    
+    # Grid: Horizontal only
+    ax.grid(axis='y', color=STYLE['grid'], lw=0.5, zorder=0)
+    ax.grid(axis='x', visible=False)
+
+    # Labels
+    ax.set_xlabel('Bimesters Relative to Switch')
+    ax.set_ylabel('Effect on P(Old Party)')
+    
+    # Ticks
+    ax.set_xticks(plot_data['time'])
+    
+    # Legend (Top right, frameon=False is standard)
+    ax.legend(loc='upper right', frameon=False, ncol=1)
+
+    # Save and Show
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    plt.show()
+
+plot_event_study(dml_stats, save_path = '../results/final_paper/figures/fig1_event_study.png')
+
 # %% [markdown]
 # ---
 # # PART III: ROBUSTNESS CHECKS
@@ -2120,7 +2404,7 @@ print_section2_1_report(section2_1_stats)
 # ### Section Setup
 
 # %%
-# ALTERNATIVE ESTIMATION METHODS  =================================================
+# ALTERNATIVE ESTIMATION METHODS (FIXED: ALIGNED TO 60-DAY BINS) ==============
 # =============================================================================
 import statsmodels.api as sm
 from scipy.stats import pearsonr
@@ -2131,9 +2415,14 @@ section3_stats = {}
 print("Running robustness checks (OLS vs TWFE vs DML)...")
 
 # 1. DATA PREPARATION ---------------------------------------------------------
-bins_comp = list(range(-180, 181, 30))
-labels_comp = [-6,-5,-4,-3,-2,-1,1,2,3,4,5,6]
-df_es_comp = df_es.dropna(subset=['Y_confidence']).copy()
+# MATCH MAIN DML: 60-day bins, ±360 day window
+bins_comp = list(range(-360, 361, 60))
+labels_comp = [-6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6]
+
+# Filter to 360-day window (previously 180)
+df_es_comp = df_es.loc[df_es['days_from_switch'].abs() <= 360].dropna(subset=['Y_confidence']).copy()
+
+# Create Bimester Bins
 df_es_comp['month'] = pd.cut(df_es_comp['days_from_switch'], bins=bins_comp, labels=labels_comp)
 
 time_dummies_comp = pd.get_dummies(df_es_comp['month'], prefix='t')
@@ -2141,7 +2430,7 @@ if 't_-1' in time_dummies_comp.columns:
     time_dummies_comp = time_dummies_comp.drop(columns=['t_-1'])
 time_dummies_comp = time_dummies_comp.astype(float)
 
-# Covariates (STANDARDIZED - same as main DML)
+# Covariates (Standardized - Same as Main)
 print("Building OLS covariate matrix...")
 X_base_comp = build_covariates(
     df_es_comp,
@@ -2164,10 +2453,10 @@ ses_ols = model_ols.bse[[c for c in model_ols.params.index if c.startswith('t_')
 
 section3_stats['OLS'] = {
     'R2': model_ols.rsquared,
-    'Peak_Effect': coefs_ols.get('t_2', np.nan),
+    'Peak_Effect': coefs_ols.get('t_1', np.nan),  # Changed to t_1 as peak is often immediate
     'N': len(Y_comp)
-    
 }
+
 # 3. METHOD 2: TWO-WAY FIXED EFFECTS (TWFE) -----------------------------------
 print("   Fitting Method 2: Proper TWFE (Deputy + Calendar Month)...")
 
@@ -2175,18 +2464,16 @@ print("   Fitting Method 2: Proper TWFE (Deputy + Calendar Month)...")
 dep_fe = pd.get_dummies(df_es_comp['deputado_id'], prefix='dep', drop_first=True).astype(float)
 
 # B. Time Fixed Effects (Calendar Month)
-# This captures macro shocks affecting all deputies in a specific month
 df_es_comp['cal_month'] = df_es_comp['dataHoraInicio'].dt.to_period('M').astype(str)
 month_fe = pd.get_dummies(df_es_comp['cal_month'], prefix='month', drop_first=True).astype(float)
 
-# C. Topic Controls (Consistent with OLS/DML)
+# C. Topic Controls
 if 'topic_id' in df_es_comp.columns:
     topic_fe = pd.get_dummies(df_es_comp['topic_id'], prefix='topic', drop_first=True).astype(float)
 else:
     topic_fe = pd.DataFrame(index=df_es_comp.index)
 
-# Combine everything
-# Note: Legislature FE is absorbed by Deputy FE, which is correct for TWFE.
+# Combine X
 X_twfe = pd.concat([time_dummies_comp, topic_fe, dep_fe, month_fe], axis=1)
 X_twfe = sm.add_constant(X_twfe)
 
@@ -2198,20 +2485,16 @@ ses_twfe = model_twfe.bse[[c for c in model_twfe.params.index if c.startswith('t
 
 section3_stats['TWFE'] = {
     'R2': model_twfe.rsquared,
-    'Peak_Effect': coefs_twfe.get('t_2', np.nan),
+    'Peak_Effect': coefs_twfe.get('t_1', np.nan),
     'N_Vars': X_twfe.shape[1]
 }
+
 # 4. METHOD 3: RETRIEVE DML RESULTS -------------------------------------------
-# Attempt to retrieve plot_data from previous section (dml_stats)
 if 'dml_stats' in globals() and 'plot_data' in dml_stats:
     plot_data_ref = dml_stats['plot_data']
     coefs_dml = plot_data_ref.set_index('time')['coef']
     ses_dml = (plot_data_ref.set_index('time')['upper'] - plot_data_ref.set_index('time')['lower']) / 3.92
-    
-    section3_stats['DML'] = {
-        'Peak_Effect': coefs_dml.get(2, np.nan),
-        'Available': True
-    }
+    section3_stats['DML'] = {'Peak_Effect': coefs_dml.get(1, np.nan), 'Available': True}
 else:
     coefs_dml = pd.Series(dtype=float)
     ses_dml = pd.Series(dtype=float)
@@ -2219,7 +2502,7 @@ else:
 
 # 5. BUILD COMPARISON DATA ----------------------------------------------------
 comparison_data = []
-for time_point in [-6,-5,-4,-3,-2,1,2,3,4,5,6]:
+for time_point in [-6, -5, -4, -3, -2, 1, 2, 3, 4, 5, 6]:
     comparison_data.append({
         'time': time_point,
         'OLS': coefs_ols.get(f't_{time_point}', np.nan),
@@ -2238,16 +2521,11 @@ valid_idx = df_comparison[['OLS','TWFE','DML']].notna().all(axis=1)
 if valid_idx.sum() > 2:
     corr_ols_dml, _ = pearsonr(df_comparison.loc[valid_idx, 'OLS'], df_comparison.loc[valid_idx, 'DML'])
     corr_twfe_dml, _ = pearsonr(df_comparison.loc[valid_idx, 'TWFE'], df_comparison.loc[valid_idx, 'DML'])
-    
-    section3_stats['correlations'] = {
-        'OLS_vs_DML': corr_ols_dml,
-        'TWFE_vs_DML': corr_twfe_dml,
-        'Calculated': True
-    }
+    section3_stats['correlations'] = {'OLS_vs_DML': corr_ols_dml, 'TWFE_vs_DML': corr_twfe_dml, 'Calculated': True}
 else:
     section3_stats['correlations'] = {'Calculated': False}
 
-print("Robustness checks complete.")
+print("Robustness checks complete (Aligned to 60-day bimesters).")
 
 # PREPARE METHOD COMPARISON PLOT DATA =========================================
 # =============================================================================
@@ -2784,13 +3062,17 @@ else:
 # %%
 # IDEOLOGICAL BLOC CLASSIFICATION =============================================
 # =============================================================================
+from scipy import stats  # <--- RE-IMPORT TO FIX THE OVERWRITE
+import numpy as np
+import pandas as pd
+
 print("Running Robustness Check: Bloc-Level Classifier (Left/Center/Right)...")
 
 # 1. TRAIN CLASSIFIER ---------------------------------------------------------
 # We use 'CAT' (Ideological Category) as the target instead of 'idPartido'
 if 'CAT' in df_train.columns and df_train['CAT'].nunique() > 1:
     
-    # Initialize Vectorizer (slightly fewer features typically sufficient for broader categories)
+    # Initialize Vectorizer
     tfidf_bloc = TfidfVectorizer(max_features=CFG.tfidf_max_features, 
                                 min_df=CFG.tfidf_min_df,
                                 max_df=CFG.tfidf_max_df, 
@@ -2817,24 +3099,15 @@ if 'CAT' in df_train.columns and df_train['CAT'].nunique() > 1:
         'classes': list(clf_bloc.classes_)
     }
 
-
     # 2. GENERATE PREDICTIONS -------------------------------------------------
     BLOC_CI = {l:i for i,l in enumerate(clf_bloc.classes_)}
     
-    # Predict directly on event study dataframe (safest method)
-    # Filter df_es to only rows where we have valid old/new Categories
+    # Predict directly on event study dataframe
     df_es_bloc = df_es.dropna(subset=['old_CAT', 'new_CAT', CFG.text_col]).copy()
     
     X_es_bloc = tfidf_bloc.transform(df_es_bloc[CFG.text_col])
     probs_bloc = list(clf_bloc.predict_proba(X_es_bloc))
     
-    # Helper to extract probability of OLD ideological block
-    def get_bloc_conf(row, probs, ci):
-        old_cat = row['old_CAT']
-        if old_cat in ci:
-            return probs[ci[old_cat]]
-        return np.nan
-
     # Map probabilities
     df_es_bloc['probs_temp'] = probs_bloc
     df_es_bloc['Y_bloc'] = df_es_bloc.apply(
@@ -2849,11 +3122,11 @@ if 'CAT' in df_train.columns and df_train['CAT'].nunique() > 1:
     pre_bloc = df_es_bloc[df_es_bloc['post']==0]['Y_bloc']
     post_bloc = df_es_bloc[df_es_bloc['post']==1]['Y_bloc']
     
-    # T-test
+    # T-test (Now uses the re-imported stats module)
     bloc_diff = post_bloc.mean() - pre_bloc.mean()
     bloc_t, bloc_p = stats.ttest_ind(post_bloc, pre_bloc, equal_var=False)
     
-    # Cohen's d (Effect Size)
+    # Cohen's d
     pooled_std = np.sqrt((pre_bloc.std()**2 + post_bloc.std()**2)/2)
     bloc_d = bloc_diff / pooled_std
 
@@ -3277,18 +3550,25 @@ section3_stats['alt_outcome'] = {
     'n_obs': len(df_es_alt)
 }
 
-# 2. RUN DML ON ALTERNATIVE OUTCOME -------------------------------------------
+# =============================================================================
+# 2. RUN DML ON ALTERNATIVE OUTCOME (FIXED: ALIGNED TO MAIN 60-DAY BINS)
+# =============================================================================
 print(f"   Running DML on {len(df_es_alt):,} observations...")
 
-# A. Prepare Matrix (Reusing logic for consistency)
-# Time Dummies
-bins = list(range(-180, 181, 30))
-labels = [-6,-5,-4,-3,-2,-1,1,2,3,4,5,6]
+# Filter to 360-day window to match Main Analysis
+df_es_alt = df_es_alt.loc[df_es_alt['days_from_switch'].abs() <= 360].copy()
+
+# A. Prepare Matrix
+# Time Dummies: 60-DAY BINS (BIMESTERS)
+bins = list(range(-360, 361, 60))
+labels = [-6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6]
+
 df_es_alt['month'] = pd.cut(df_es_alt['days_from_switch'], bins=bins, labels=labels)
 time_dummies_alt = pd.get_dummies(df_es_alt['month'], prefix='t')
-if 't_-1' in time_dummies_alt.columns: time_dummies_alt = time_dummies_alt.drop(columns=['t_-1'])
+if 't_-1' in time_dummies_alt.columns: 
+    time_dummies_alt = time_dummies_alt.drop(columns=['t_-1'])
 
-# Controls (STANDARDIZED - identical to main DML)
+# Controls (Standardized)
 X_alt = build_covariates(
     df_es_alt,
     include_calendar_month_fe=False,
@@ -3299,6 +3579,7 @@ X_alt = build_covariates(
 
 Y_alt = df_es_alt['Y_alt'].values
 clusters_alt = df_es_alt['deputado_id'].values
+
 
 # B. DML Estimation
 learner_Y = HistGradientBoostingRegressor(max_iter=100, max_depth=5, random_state=SEED)
@@ -4060,7 +4341,6 @@ else:
 
 print("\n")
 
-
 # SUMMARY TABLE ===============================================================
 
 print("\n" + "="*80)
@@ -4100,172 +4380,230 @@ print("ROBUSTNESS REPORT COMPLETE")
 print("="*80)
 print(f"Total checks completed: {len(summary_data)}")
 
+# %%
+def generate_all_visualizations(section3_stats, dml_data=None, save_dir=None):
+    """
+    Generates robustness and sensitivity plots.
+    - Automatically creates save_dir if it does not exist.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+    import os
 
-# =============================================================================
-# PART 2: ALL VISUALIZATIONS
-# =============================================================================
+    # --- FIX: CREATE DIRECTORY IF IT DOESN'T EXIST ---
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
 
-print("\n" + "="*80)
-print("GENERATING VISUALIZATIONS...")
-print("="*80)
+    # --- 1. GLOBAL FONT & STYLE SETUP ---
+    plt.rcParams.update({
+        'font.family': 'serif',
+        'font.serif': ['Times New Roman', 'DejaVu Serif', 'Bitstream Vera Serif'],
+        'font.size': 10,
+        'axes.labelsize': 10,
+        'axes.titlesize': 10,
+        'xtick.labelsize': 9,
+        'ytick.labelsize': 9,
+        'legend.fontsize': 9,
+        'mathtext.fontset': 'cm',
+        'axes.linewidth': 0.5,
+    })
 
-# FIGURE: METHOD COMPARISON ===================================================
-
-if 'section3_stats' in globals() and 'comparison_table' in section3_stats:
-    df_comp = section3_stats['comparison_table']
+    # --- 2. COLORS & HELPERS ---
+    ECONOMIST_COLORS = ['#006BA2', '#3EBCD2', '#379A8B', '#EBB434', '#DB444B']
     
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    ax.plot(df_comp['time'], df_comp['OLS'], 'o--', color='#e74c3c', alpha=0.6, label='OLS', linewidth=2)
-    ax.plot(df_comp['time'], df_comp['TWFE'], 's--', color='#3498db', alpha=0.6, label='TWFE', linewidth=2)
-    ax.plot(df_comp['time'], df_comp['DML'], 'D-', color='#2ecc71', lw=2.5, label='DML (Main)', markersize=8)
-    
-    ax.axhline(0, color='black', lw=1, alpha=0.5)
-    ax.axvline(0, color='red', ls=':', lw=1.5)
-    ax.set_title("Robustness to Estimation Method", fontweight='bold', fontsize=14)
-    ax.set_xlabel("Months from Switch", fontsize=12)
-    ax.set_ylabel("Effect on P(Old Party)", fontsize=12)
-    ax.legend(fontsize=11)
-    ax.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.show()
-    print("✅ Method comparison plot generated")
+    C_MAIN   = ECONOMIST_COLORS[0]  # Dark Blue (Standard Outcome)
+    C_SEC    = ECONOMIST_COLORS[1]  # Light Blue
+    C_TERT   = ECONOMIST_COLORS[2]  # Teal (Alternative Outcome)
+    C_ACCENT = ECONOMIST_COLORS[3]  # Yellow
+    C_ALERT  = ECONOMIST_COLORS[4]  # Red
+    C_GRAY   = '#444444'
+    C_GRID   = '#dcdcdc'
 
-# FIGURE: PLACEBO DISTRIBUTION ================================================
+    def format_ax(ax, xlabel, ylabel):
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        ax.grid(axis='y', color=C_GRID, lw=0.5, zorder=0)
+        ax.grid(axis='x', visible=False)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        return ax
 
-if 'section3_stats' in globals() and 'placebo' in section3_stats:
-    placebo = section3_stats['placebo']
-    
-    if placebo['status'] == 'Complete':
-        fig, ax = plt.subplots(figsize=(10, 6))
+    print("\n" + "="*80)
+    print("GENERATING VISUALIZATIONS (Corrected Reference Points)...")
+    print("="*80)
+
+    # 1. FIGURE: METHOD COMPARISON ============================================
+    if 'comparison_table' in section3_stats:
+        df_comp = section3_stats['comparison_table'].copy()
         
-        ax.hist(placebo['placebo_stats'], bins=50, alpha=0.7, color='gray', edgecolor='black')
-        ax.axvline(placebo['true_effect'], color='red', linestyle='--', linewidth=2.5, 
-                   label=f"True Effect ({placebo['true_effect']:.4f})")
-        ax.axvline(placebo['mean_placebo'], color='blue', linestyle=':', linewidth=2,
-                   label=f"Mean Placebo ({placebo['mean_placebo']:.4f})")
+        # FIX: Ensure reference point exists
+        if -1 not in df_comp['time'].values:
+            ref_row = pd.DataFrame({'time': [-1], 'OLS': [0], 'TWFE': [0], 'DML': [0]})
+            df_comp = pd.concat([df_comp, ref_row]).sort_values('time')
+
+        fig, ax = plt.subplots(figsize=figsize(width_key='my_paper', aspect=0.5))
         
-        ax.set_xlabel('|Effect Size|', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Frequency', fontsize=12, fontweight='bold')
-        ax.set_title('Placebo Distribution Test\n(Permutation-Based Inference)', 
-                     fontsize=14, fontweight='bold')
-        ax.legend(fontsize=11)
-        ax.grid(True, alpha=0.3)
+        ax.axhline(0, color=C_GRAY, lw=0.8, alpha=0.8, zorder=1)
+        ax.axvline(0, color=C_ALERT, ls='--', lw=0.8, zorder=1)
         
-        ax.text(0.95, 0.95, f'p < {placebo["p_value"]:.4f}\nPercentile: {placebo["percentile"]:.1f}th',
-                transform=ax.transAxes, fontsize=12, verticalalignment='top', horizontalalignment='right',
-                bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7))
+        ax.plot(df_comp['time'], df_comp['OLS'], 'o--', 
+                color=C_SEC, alpha=0.7, label='OLS', lw=1.0, ms=4, zorder=2)
+        ax.plot(df_comp['time'], df_comp['TWFE'], 's--', 
+                color=C_TERT, alpha=0.7, label='TWFE', lw=1.0, ms=4, zorder=2)
+        ax.plot(df_comp['time'], df_comp['DML'], 'D-', 
+                color=C_MAIN, lw=1, label='DML (Main)', ms=5, zorder=3)
+        
+        format_ax(ax, "Bimesters from Switch", "Effect on P(Old Party)")
+        ax.legend(frameon=False, loc='best')
         
         plt.tight_layout()
+        if save_dir: plt.savefig(os.path.join(save_dir, 'fig_robust_methods.png'), dpi=300)
         plt.show()
-        print("✅ Placebo distribution plot generated")
+        print("✅ Method comparison plot generated")
 
-# FIGURE: WINDOW SENSITIVITY ==================================================
+    # 2. FIGURE: PLACEBO DISTRIBUTION =========================================
+    if 'placebo' in section3_stats:
+        placebo = section3_stats['placebo']
+        if placebo['status'] == 'Complete':
+            fig, ax = plt.subplots(figsize=figsize(width_key='my_paper', aspect=0.6))
+            ax.hist(placebo['placebo_stats'], bins=40, alpha=0.85, 
+                    color=C_TERT, edgecolor='white', linewidth=0.5, zorder=2)
+            ax.axvline(placebo['true_effect'], color=C_ALERT, ls='--', lw=1.2, 
+                       label=f"True Effect ({placebo['true_effect']:.3f})", zorder=3)
+            ax.axvline(placebo['mean_placebo'], color=C_MAIN, ls=':', lw=1.2,
+                       label=f"Mean Placebo ({placebo['mean_placebo']:.3f})", zorder=3)
+            format_ax(ax, "|Effect Size|", "Frequency")
+            stats_text = f'$p$-value < {placebo["p_value"]:.4f}\nPercentile: {placebo["percentile"]:.1f}'
+            ax.text(0.95, 0.90, stats_text, transform=ax.transAxes, 
+                    fontsize=9, va='top', ha='right',
+                    bbox=dict(boxstyle='square,pad=0.4', fc=C_ACCENT, alpha=0.15, ec='none'))
+            ax.legend(frameon=False, loc='upper right')
+            plt.tight_layout()
+            if save_dir: plt.savefig(os.path.join(save_dir, 'fig_placebo.png'), dpi=300)
+            plt.show()
+            print("✅ Placebo distribution plot generated")
 
-if 'section3_stats' in globals() and 'window_sensitivity' in section3_stats:
-    win_sens = section3_stats['window_sensitivity']
-    
-    if win_sens['status'] == 'Complete':
-        df_win = win_sens['results']
-        
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-        
-        # Effect size across windows
-        ax1.plot(df_win['window_months'], df_win['coef'], 'o-', linewidth=2, markersize=10, color='#2ecc71')
-        ax1.axhline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
-        ax1.set_xlabel('Window Size (months)', fontsize=12, fontweight='bold')
-        ax1.set_ylabel('ATE (Post vs Pre)', fontsize=12, fontweight='bold')
-        ax1.set_title('Effect Size Across Time Windows', fontsize=13, fontweight='bold')
-        ax1.grid(True, alpha=0.3)
-        
-        # Sample size
-        ax2.bar(df_win['window_months'], df_win['n_obs'], color='#3498db', alpha=0.7, edgecolor='black')
-        ax2.set_xlabel('Window Size (months)', fontsize=12, fontweight='bold')
-        ax2.set_ylabel('N Observations', fontsize=12, fontweight='bold')
-        ax2.set_title('Sample Size by Window', fontsize=13, fontweight='bold')
-        ax2.grid(True, alpha=0.3, axis='y')
-        
-        plt.tight_layout()
-        plt.show()
-        print("✅ Window sensitivity plot generated")
+    # 3. FIGURE: WINDOW SENSITIVITY ===========================================
+    if 'window_sensitivity' in section3_stats:
+        win_sens = section3_stats['window_sensitivity']
+        if win_sens['status'] == 'Complete':
+            df_win = win_sens['results']
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize(width_key='my_paper', fraction=1.0, aspect=0.4))
+            ax1.axhline(0, color=C_GRAY, ls='--', lw=0.8, alpha=0.5, zorder=1)
+            ax1.plot(df_win['window_months'], df_win['coef'], 'o-', 
+                     lw=1.5, ms=5, color=C_MAIN, zorder=2)
+            format_ax(ax1, "Window Size (months)", "ATE (Post vs Pre)")
+            ax2.bar(df_win['window_months'], df_win['n_obs'], 
+                    color=C_TERT, alpha=0.9, width=1.5, zorder=2)
+            format_ax(ax2, "Window Size (months)", "N Observations")
+            plt.tight_layout()
+            if save_dir: plt.savefig(os.path.join(save_dir, 'fig_window_sensitivity.png'), dpi=300)
+            plt.show()
+            print("✅ Window sensitivity plot generated")
 
-# FIGURE: ALTERNATIVE OUTCOME =================================================
-
-if 'section3_stats' in globals() and 'alt_outcome' in section3_stats:
-    alt_out = section3_stats['alt_outcome']
-    
-    if alt_out['status'] == 'Complete' and 'plot_data' in alt_out:
-        plot_alt = alt_out['plot_data']
+    # 4. FIGURE: STANDARD VS ALTERNATIVE OUTCOME (COMBINED) ===================
+    if 'alt_outcome' in section3_stats and dml_data is not None:
+        alt_out = section3_stats['alt_outcome']
         
-        fig, ax = plt.subplots(figsize=(12, 6))
-        
-        times = plot_alt['time'].values
-        coefs = plot_alt['coef'].values
-        ses = plot_alt['se'].values
-        
-        ax.plot(times, coefs, 'o-', linewidth=2.5, markersize=10, color='#16a085', 
-                label='P(New) - P(Old)')
-        ax.fill_between(times, coefs - 1.96*ses, coefs + 1.96*ses,
-                       alpha=0.3, color='#16a085')
-        
-        ax.axhline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
-        ax.axvline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
-        
-        ax.set_xlabel('Months from Switch', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Δ [P(New Party) - P(Old Party)]', fontsize=12, fontweight='bold')
-        ax.set_title('Alternative Outcome: Movement Toward New Party', fontsize=14, fontweight='bold')
-        ax.legend(fontsize=11)
-        ax.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        plt.show()
-        print("✅ Alternative outcome plot generated")
-
-# FIGURE: EVENT STUDY COMPARISON ACROSS WINDOWS ================================
-
-if 'section3_stats' in globals() and 'window_comparison_event_study' in section3_stats:
-    comp = section3_stats['window_comparison_event_study']
-    
-    if comp['status'] == 'Complete':
-        fig, ax = plt.subplots(figsize=(12, 7))
-        
-        colors = {'6': '#e74c3c', '9': '#3498db', '12': '#2ecc71'}
-        
-        for window_months, data in comp['results'].items():
-            plot_data = data['plot_data']
-            n = data['n_obs']
+        if alt_out['status'] == 'Complete' and 'plot_data' in alt_out:
+            fig, ax = plt.subplots(figsize=figsize(width_key='my_paper', aspect=0.6))
             
-            label = f"±{window_months} months (N={n:,})"
-            color = colors[str(window_months)]
+            # --- Reference Lines ---
+            ax.axhline(0, color=C_GRAY, ls='-', lw=0.8, alpha=0.5, zorder=1)
+            ax.axvline(0, color=C_ALERT, ls='--', lw=0.8, alpha=0.8, zorder=1)
+
+            # --- SERIES 1: STANDARD OUTCOME (from dml_data) ---
+            # Ensure standard data has reference point too (usually does, but safe to check)
+            std_data = dml_data['plot_data'].copy()
+            if -1 not in std_data['time'].values:
+                ref_row = pd.DataFrame({'time': [-1], 'coef': [0], 'lower': [0], 'upper': [0]})
+                std_data = pd.concat([std_data, ref_row]).sort_values('time')
+
+            ax.plot(std_data['time'], std_data['coef'], 'o-', 
+                    lw=1, ms=4, color=C_MAIN, label='Standard: P(Old Party)', zorder=4)
+            ax.fill_between(std_data['time'], 
+                            std_data['lower'], 
+                            std_data['upper'], 
+                            alpha=0.15, color=C_MAIN, lw=0, zorder=2)
+
+            # --- SERIES 2: ALTERNATIVE OUTCOME (from section3_stats) ---
+            alt_data = alt_out['plot_data'].copy()
             
-            ax.plot(plot_data['time'], plot_data['coef'], 
-                   'o-', linewidth=2.5, markersize=8, 
-                   color=color, label=label, alpha=0.8)
+            # --- FIX: INSERT REFERENCE POINT FOR ALTERNATIVE OUTCOME ---
+            if -1 not in alt_data['time'].values:
+                # Create a 0-row. Set SE/Bounds to 0 for the reference point.
+                ref_row = pd.DataFrame({
+                    'time': [-1], 
+                    'coef': [0], 
+                    'se': [0],
+                    'lower': [0],
+                    'upper': [0]
+                })
+                # Handle case where lower/upper might not exist in original df
+                if 'lower' not in alt_data.columns:
+                     alt_data['lower'] = alt_data['coef'] - 1.96 * alt_data['se']
+                     alt_data['upper'] = alt_data['coef'] + 1.96 * alt_data['se']
+                
+                alt_data = pd.concat([alt_data, ref_row]).sort_values('time')
+
+            # Re-calculate bounds if they were missing or just to be safe after concat
+            if 'lower' not in alt_data.columns or alt_data['lower'].isnull().any():
+                 # Avoid overwriting the 0s we just set for the reference point
+                 mask = alt_data['time'] != -1
+                 alt_data.loc[mask, 'lower'] = alt_data.loc[mask, 'coef'] - 1.96 * alt_data.loc[mask, 'se']
+                 alt_data.loc[mask, 'upper'] = alt_data.loc[mask, 'coef'] + 1.96 * alt_data.loc[mask, 'se']
+
+            ax.plot(alt_data['time'], alt_data['coef'], 's--', 
+                    lw=1, ms=4, color=C_TERT, label='Alternative: P(New - Old)', zorder=3)
             
-            ax.fill_between(plot_data['time'], 
-                          plot_data['lower'], 
-                          plot_data['upper'],
-                          alpha=0.2, color=color)
-        
-        ax.axhline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
-        ax.axvline(0, color='red', linestyle=':', linewidth=1.5, alpha=0.7)
-        
-        ax.set_xlabel('Months from Switch', fontsize=13, fontweight='bold')
-        ax.set_ylabel('Effect on P(Old Party)', fontsize=13, fontweight='bold')
-        ax.set_title('Event Study: Comparison Across Time Windows', 
-                    fontsize=15, fontweight='bold')
-        ax.legend(fontsize=11, loc='upper right')
-        ax.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        
-        plt.show()
-        print("✅ Event study comparison plot generated")
-        
-print("\n" + "="*80)
-print("ALL VISUALIZATIONS COMPLETE")
-print("="*80)
+            ax.fill_between(alt_data['time'], 
+                            alt_data['lower'], 
+                            alt_data['upper'], 
+                            alpha=0.15, color=C_TERT, lw=0, zorder=2)
+            
+            format_ax(ax, "Bimesters from Switch", "Treatment Effect")
+            ax.legend(frameon=False, loc='best')
+            
+            plt.tight_layout()
+            if save_dir: plt.savefig(os.path.join(save_dir, 'fig_outcomes_combined.png'), dpi=300)
+            plt.show()
+            print("✅ Combined outcomes plot generated")
+
+    # 5. FIGURE: EVENT STUDY COMPARISON =======================================
+    if 'window_comparison_event_study' in section3_stats:
+        comp = section3_stats['window_comparison_event_study']
+        if comp['status'] == 'Complete':
+            fig, ax = plt.subplots(figsize=figsize(width_key='my_paper', aspect=0.6))
+            ax.axhline(0, color=C_GRAY, ls='-', lw=0.8, alpha=0.5, zorder=1)
+            ax.axvline(0, color=C_ALERT, ls='--', lw=0.8, zorder=1)
+            color_map = {'6': C_TERT, '9': C_SEC, '12': C_MAIN}
+            
+            for window_months, data in comp['results'].items():
+                plot_data = data['plot_data']
+                w_str = str(window_months)
+                color = color_map.get(w_str, C_GRAY)
+                label = f"±{window_months}m (N={data['n_obs']:,})"
+                ax.plot(plot_data['time'], plot_data['coef'], 'o-', 
+                        lw=1.0, ms=3, color=color, label=label, alpha=0.9, zorder=3)
+                ax.fill_between(plot_data['time'], plot_data['lower'], plot_data['upper'],
+                                alpha=0.1, color=color, lw=0, zorder=2)
+            
+            format_ax(ax, "Bimesters from Switch", "Effect on P(Old Party)")
+            ax.legend(frameon=False, loc='upper right')
+            plt.tight_layout()
+            if save_dir: plt.savefig(os.path.join(save_dir, 'fig_window_comp.png'), dpi=300)
+            plt.show()
+            print("✅ Event study comparison plot generated")
+
+    print("\n" + "="*80)
+    print("ALL VISUALIZATIONS COMPLETE")
+    print("="*80)
+
+# USAGE:
+save_dir = "../results/final_paper/figures"
+generate_all_visualizations(section3_stats, dml_data=dml_stats, save_dir=save_dir)
 
 # %% [markdown]
 # ---
@@ -4416,8 +4754,8 @@ df_events_bloc['within_bloc'] = df_events_bloc['within_left'] | df_events_bloc['
 def run_event_study_ols(df_subset):
     if len(df_subset) < 100: return None, None, 0
     
-    # Time Bins
-    bins_wb = list(range(-180, 181, 30))
+    # Time Bins (Matches Main Analysis)
+    bins_wb = list(range(-360, 361, 60))
     labels_wb = [-6,-5,-4,-3,-2,-1,1,2,3,4,5,6]
     df_subset = df_subset.copy()
     df_subset['month'] = pd.cut(df_subset['days_from_switch'], bins=bins_wb, labels=labels_wb)
@@ -4426,7 +4764,7 @@ def run_event_study_ols(df_subset):
     time_dummies = pd.get_dummies(df_subset['month'], prefix='t').astype(float)
     if 't_-1' in time_dummies.columns: time_dummies = time_dummies.drop(columns=['t_-1'])
     
-    # Covariates (STANDARDIZED - using build_covariates function)
+    # Covariates
     X_controls = build_covariates(
         df_subset,
         include_calendar_month_fe=False,
@@ -4451,7 +4789,16 @@ def run_event_study_ols(df_subset):
         'time': [int(c.replace('t_','')) for c in coefs.index],
         'coef': coefs.values,
         'se': ses.values
-    }).sort_values('time')
+    })
+    
+    # --- FIX: INSERT REFERENCE POINT (t=-1) ---
+    # This forces the line to touch 0 at the reference period
+    ref_row = pd.DataFrame({
+        'time': [-1],
+        'coef': [0.0],
+        'se': [0.0]
+    })
+    plot_data = pd.concat([plot_data, ref_row], ignore_index=True).sort_values('time')
     
     # Add CI columns
     plot_data['lower'] = plot_data['coef'] - 1.96 * plot_data['se']
@@ -5094,205 +5441,243 @@ if len(heterogeneity_table) > 0:
 else:
     print("\n⚠️  No heterogeneity results to tabulate")
 
-# ============================================================================
-# FIGURE 3: HETEROGENEITY VISUALIZATION (2x2 GRID)
-# ============================================================================
 
-print("\n" + "="*80)
-print("FIGURE 3: HETEROGENEITY GRID")
-print("="*80)
-
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-# ============================================================================
-# PANEL A: Ideological Distance (Scatter + Regression)
-# ============================================================================
-ax1 = axes[0, 0]
-
-if 'distance' in section4_stats and section4_stats['distance']['status'] == 'Complete':
-    dist = section4_stats['distance']
-    df_plot = df_het.dropna(subset=['ideology_distance', 'abs_effect'])
-    
-    ax1.scatter(df_plot['ideology_distance'], df_plot['abs_effect'],
-               alpha=0.5, s=50, color=COLORS['main'], edgecolor='black', linewidth=0.5)
-    
-    # Add regression line
+# %%
+def generate_heterogeneity_and_bloc_plots(section4_stats, section3_stats, df_het, save_dir=None):
+    """
+    Generates heterogeneity figures.
+    - Fig 3B: Heterogeneity Bars (Direction=Yellow, Experience=Green, Party=Blue)
+      * Ordered: Left->Right, Junior->Senior, Minor->Major
+      * Colors: Light Pastel -> Saturated
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+    import os
     from scipy.stats import linregress
-    slope, intercept, r, p, se = linregress(df_plot['ideology_distance'], df_plot['abs_effect'])
-    x_line = np.linspace(df_plot['ideology_distance'].min(), df_plot['ideology_distance'].max(), 100)
-    y_line = slope * x_line + intercept
-    ax1.plot(x_line, y_line, 'r--', linewidth=2, alpha=0.8,
-            label=f'β={dist["beta"]:.3f}, p={dist["p"]:.3f}')
+
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+
+    # --- STYLE SETUP ---
+    plt.rcParams.update({
+        'font.family': 'serif',
+        'font.serif': ['Times New Roman', 'DejaVu Serif', 'Bitstream Vera Serif'],
+        'font.size': 10,
+        'axes.labelsize': 10,
+        'xtick.labelsize': 9,
+        'ytick.labelsize': 9,
+        'legend.fontsize': 9,
+        'axes.linewidth': 0.5,
+    })
+
+    C_GRAY = '#444444'
+    C_GRID = '#dcdcdc'
     
-    ax1.set_xlabel('Ideological Distance (|ΔIdeology|)', fontsize=11)
-    ax1.set_ylabel('|Effect Size|', fontsize=11)
-    ax1.set_title('A. Ideological Distance', fontweight='bold', fontsize=12)
-    ax1.legend()
-    ax1.grid(True, ls=':', alpha=0.3)
+    # --- CUSTOM PASTEL-TO-SATURATED PALETTES ---
+    PALETTE_DIR = ['#0069A2', '#0096E7', '#09A6FB']
 
-# ============================================================================
-# PANEL B: Direction (Bar Chart)
-# ============================================================================
-ax2 = axes[0, 1]
+    PALETTE_EXP = ['#379A8B', '#5AB6A9', '#8ED6CC']
 
-if 'direction' in section4_stats and section4_stats['direction']['status'] == 'Complete':
-    direc = section4_stats['direction']
-    
-    # Create data for bar chart
-    dir_data = direc['summary'].reset_index()
-    dir_data.columns = ['direction', 'mean', 'std', 'count']
-    dir_data = dir_data.sort_values('mean', ascending=False)
-    
-    # Calculate SEM
-    dir_data['sem'] = dir_data['std'] / np.sqrt(dir_data['count'])
-    
-    x_pos = np.arange(len(dir_data))
-    colors_dir = {'Rightward': '#e74c3c', 'Leftward': '#3498db', 'Lateral': '#95a5a6'}
-    bar_colors = [colors_dir.get(d, COLORS['main']) for d in dir_data['direction']]
-    
-    ax2.bar(x_pos, dir_data['mean'], yerr=dir_data['sem']*1.96,
-           color=bar_colors, alpha=0.7, capsize=5, edgecolor='black')
-    ax2.set_xticks(x_pos)
-    ax2.set_xticklabels(dir_data['direction'], rotation=0)
-    ax2.set_ylabel('Mean |Effect Size|', fontsize=11)
-    ax2.set_title('B. Ideological Direction', fontweight='bold', fontsize=12)
-    ax2.grid(True, axis='y', ls=':', alpha=0.3)
+    PALETTE_SIZE = ['#EBB434', '#FFCE5C', '#FFDB85'] 
 
-# ============================================================================
-# PANEL C: Experience (Bar Chart)
-# ============================================================================
-ax3 = axes[1, 0]
+    def format_ax(ax, xlabel, ylabel):
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        ax.grid(axis='y', color=C_GRID, lw=0.5, zorder=0)
+        ax.grid(axis='x', visible=False)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        return ax
 
-if 'experience' in section4_stats and section4_stats['experience']['status'] == 'Complete':
-    exp = section4_stats['experience']
-    exp_data = df_het[df_het['experience_cat'] != 'Unknown'].groupby('experience_cat')['abs_effect'].agg(['mean','sem']).reset_index()
-    exp_order = ['Junior', 'Mid', 'Senior']
-    exp_data['experience_cat'] = pd.Categorical(exp_data['experience_cat'], categories=exp_order, ordered=True)
-    exp_data = exp_data.sort_values('experience_cat')
-    
-    x_pos = np.arange(len(exp_data))
-    colors_exp = ['#2ecc71', '#f39c12', '#e74c3c'][:len(exp_data)]
-    ax3.bar(x_pos, exp_data['mean'], yerr=exp_data['sem']*1.96,
-           color=colors_exp, alpha=0.7, capsize=5, edgecolor='black')
-    ax3.set_xticks(x_pos)
-    ax3.set_xticklabels(exp_data['experience_cat'])
-    ax3.set_ylabel('Mean |Effect Size|', fontsize=11)
-    ax3.set_title('C. Career Experience', fontweight='bold', fontsize=12)
-    ax3.grid(True, axis='y', ls=':', alpha=0.3)
+    print("\n" + "="*80)
+    print("GENERATING HETEROGENEITY PLOTS (Ordered, Pastel -> Saturated)...")
+    print("="*80)
 
-# ============================================================================
-# PANEL D: Party Size (Bar Chart)
-# ============================================================================
-ax4 = axes[1, 1]
-
-if 'party_size' in section4_stats and section4_stats['party_size']['status'] == 'Complete':
-    psize = section4_stats['party_size']
-    size_data = df_het[df_het['party_size_cat'] != 'Unknown'].groupby('party_size_cat')['abs_effect'].agg(['mean','sem']).reset_index()
-    size_order = ['Major', 'Medium', 'Minor']
-    size_data['party_size_cat'] = pd.Categorical(size_data['party_size_cat'], categories=size_order, ordered=True)
-    size_data = size_data.sort_values('party_size_cat')
-    
-    x_pos = np.arange(len(size_data))
-    colors_size = ['#3498db', '#9b59b6', '#95a5a6'][:len(size_data)]
-    ax4.bar(x_pos, size_data['mean'], yerr=size_data['sem']*1.96,
-           color=colors_size, alpha=0.7, capsize=5, edgecolor='black')
-    ax4.set_xticks(x_pos)
-    ax4.set_xticklabels(size_data['party_size_cat'])
-    ax4.set_ylabel('Mean |Effect Size|', fontsize=11)
-    ax4.set_title('D. Destination Party Size', fontweight='bold', fontsize=12)
-    ax4.grid(True, axis='y', ls=':', alpha=0.3)
-
-plt.suptitle('Figure 3: Heterogeneity in Linguistic Adaptation',
-            fontsize=16, fontweight='bold', y=0.995)
-plt.tight_layout(rect=[0, 0.03, 1, 0.99])
-plt.savefig(os.path.join(PLOTS_DIR, 'fig3_heterogeneity_grid.png'), dpi=300, bbox_inches='tight')
-plt.savefig(os.path.join(PLOTS_DIR, 'fig3_heterogeneity_grid.pdf'), bbox_inches='tight')
-plt.show()
-
-print("\n✅ Figure 3 saved: fig3_heterogeneity_grid.png/pdf")
-
-# FIGURE: WITHIN-BLOC VS CROSS-BLOC EVENT STUDY ===============================
-# =============================================================================
-
-print("\n" + "="*80)
-print("FIGURE: WITHIN-BLOC VS CROSS-BLOC EVENT STUDY")
-print("="*80)
-
-if 'section3_stats' in globals() and 'within_bloc' in section3_stats:
-    wb = section3_stats['within_bloc']
-    
-    if wb['status'] == 'Complete' and wb['plot_data_within'] is not None and wb['plot_data_cross'] is not None:
-        fig, ax = plt.subplots(figsize=(12, 7))
+    # ========================================================================
+    # FIGURE 3A: IDEOLOGICAL DISTANCE (SCATTER)
+    # ========================================================================
+    if 'distance' in section4_stats and section4_stats['distance']['status'] == 'Complete':
+        dist = section4_stats['distance']
+        df_plot = df_het.dropna(subset=['ideology_distance', 'abs_effect'])
         
-        plot_wb = wb['plot_data_within']
-        plot_cb = wb['plot_data_cross']
+        fig, ax = plt.subplots(figsize=(5, 4))
+        # Use Economist Blue for scatter points
+        ax.scatter(df_plot['ideology_distance'], df_plot['abs_effect'],
+                   alpha=0.6, s=40, color='#006BA2', edgecolor='none', zorder=2)
         
-        # Plot lines
-        ax.plot(plot_wb['time'], plot_wb['coef'], 'o-', linewidth=2.5, markersize=8,
-                color='#f39c12', label=f'Within-Bloc (N={wb["n_within"]:,}, {wb["n_switchers_within"]} switchers)',
-                zorder=3)
-        ax.plot(plot_cb['time'], plot_cb['coef'], 's-', linewidth=2.5, markersize=8,
-                color='#8e44ad', label=f'Cross-Bloc (N={wb["n_cross"]:,}, {wb["n_switchers_cross"]} switchers)',
-                zorder=3)
+        slope, intercept, r, p, se = linregress(df_plot['ideology_distance'], df_plot['abs_effect'])
+        x_line = np.linspace(df_plot['ideology_distance'].min(), df_plot['ideology_distance'].max(), 100)
+        y_line = slope * x_line + intercept
         
-        # Add confidence intervals if SE available
-        if 'se' in plot_wb.columns:
-            ax.fill_between(plot_wb['time'], 
-                          plot_wb['coef'] - 1.96*plot_wb['se'],
-                          plot_wb['coef'] + 1.96*plot_wb['se'],
-                          alpha=0.2, color='#f39c12')
+        # Red line for regression
+        ax.plot(x_line, y_line, color='#DB444B', linestyle='--', linewidth=1.5, alpha=0.9,
+                label=f'Slope: {dist["beta"]:.3f} ($p={dist["p"]:.3f}$)', zorder=3)
         
-        if 'se' in plot_cb.columns:
-            ax.fill_between(plot_cb['time'], 
-                          plot_cb['coef'] - 1.96*plot_cb['se'],
-                          plot_cb['coef'] + 1.96*plot_cb['se'],
-                          alpha=0.2, color='#8e44ad')
-        
-        # Reference lines
-        ax.axhline(0, color='black', linestyle='--', linewidth=1, alpha=0.5, zorder=1)
-        ax.axvline(0, color='red', linestyle=':', linewidth=1.5, alpha=0.7, zorder=1)
-        
-        # Styling
-        ax.set_xlabel('Months from Switch', fontsize=13, fontweight='bold')
-        ax.set_ylabel('Effect on P(Old Party)', fontsize=13, fontweight='bold')
-        ax.set_title('Within-Bloc vs Cross-Bloc Switching: Event Study Comparison', 
-                    fontsize=15, fontweight='bold')
-        ax.legend(fontsize=11, loc='upper right')
-        ax.grid(True, alpha=0.3)
-        
-        # Add annotations
-        if not pd.isna(wb['peak_within']) and not pd.isna(wb['peak_cross']):
-            ratio = abs(wb['peak_cross']) / abs(wb['peak_within'])
-            ax.text(0.05, 0.05, 
-                   f"Peak effect ratio (cross/within): {ratio:.2f}×\n" + 
-                   f"Within-bloc (τ=+1): {wb['peak_within']:.3f}***\n" + 
-                   f"Cross-bloc (τ=+1): {wb['peak_cross']:.3f}***",
-                   transform=ax.transAxes, fontsize=10,
-                   verticalalignment='bottom', horizontalalignment='left',
-                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-        
+        format_ax(ax, "Ideological Distance (|ΔIdeology|)", "|Effect Size|")
+        ax.legend(frameon=False, loc='best')
         plt.tight_layout()
-        
-        # Save
-        if 'PLOTS_DIR' in globals():
-            plt.savefig(os.path.join(PLOTS_DIR, 'fig_within_cross_bloc.png'), dpi=300, bbox_inches='tight')
-            plt.savefig(os.path.join(PLOTS_DIR, 'fig_within_cross_bloc.pdf'), bbox_inches='tight')
-            print("\n✅ Figure saved: fig_within_cross_bloc.png/pdf")
-        
+        if save_dir: plt.savefig(os.path.join(save_dir, 'fig3a_distance.png'), dpi=300)
         plt.show()
-        
-        # Key findings
-        print("\nKey Findings:")
-        print(f"  1. Both groups show flat pre-trends (parallel trends assumption holds)")
-        print(f"  2. Both show immediate drops post-switch (no anticipation effects)")
-        print(f"  3. Cross-bloc effect ({wb['peak_cross']:.3f}) is {ratio:.1f}× larger than within-bloc ({wb['peak_within']:.3f})")
-        print(f"  4. Both effects persist without reversion over 6 months")
-        print(f"  5. Gradient suggests ideological repositioning compounds party-specific adaptation")
-        
-    else:
-        print("\n⚠️  Plot data not available")
-else:
-    print("\n⚠️  Within-bloc analysis not found")
+        print("✅ Figure 3A (Distance) saved.")
+
+    # ========================================================================
+    # FIGURE 3B: HETEROGENEITY BARS (SIDE-BY-SIDE)
+    # ========================================================================
+    has_dir = 'direction' in section4_stats and section4_stats['direction']['status'] == 'Complete'
+    has_exp = 'experience' in section4_stats and section4_stats['experience']['status'] == 'Complete'
+    has_size = 'party_size' in section4_stats and section4_stats['party_size']['status'] == 'Complete'
+
+    if has_dir or has_exp or has_size:
+        fig, axes = plt.subplots(1, 3, figsize=(6, 3.5), sharey=True)
+        plt.subplots_adjust(wspace=0.1)
+
+        BAR_WIDTH = 0.8
+        CAP_SIZE = 3
+        ERR_LW = 1
+
+        # --- PANEL 1: DIRECTION (Yellows) ---
+        # Order: Leftward -> Lateral -> Rightward
+        ax1 = axes[0]
+        if has_dir:
+            direc = section4_stats['direction']
+            dir_data = direc['summary'].reset_index()
+            dir_data.columns = ['direction', 'mean', 'std', 'count']
+            dir_data['sem'] = dir_data['std'] / np.sqrt(dir_data['count'])
+            
+            # Enforce Order
+            order_dir = ['Leftward', 'Lateral', 'Rightward']
+            dir_data['direction'] = pd.Categorical(dir_data['direction'], categories=order_dir, ordered=True)
+            dir_data = dir_data.sort_values('direction')
+            
+            x_pos = np.arange(len(dir_data))
+            # Ensure we have enough colors if data is missing a category, though logic assumes 3
+            colors = PALETTE_DIR[:len(dir_data)]
+            
+            ax1.bar(x_pos, dir_data['mean'], yerr=dir_data['sem']*1.96,
+                   color=colors, alpha=0.9, width=BAR_WIDTH, 
+                   capsize=CAP_SIZE, error_kw={'ecolor': C_GRAY, 'lw': ERR_LW}, zorder=2)
+            
+            format_ax(ax1, "Direction", "Mean |Effect Size|")
+            ax1.set_xticks(x_pos)
+            ax1.set_xticklabels(dir_data['direction'])
+        else:
+            ax1.axis('off')
+
+        # --- PANEL 2: EXPERIENCE (Greens) ---
+        # Order: Junior -> Mid -> Senior
+        ax2 = axes[1]
+        if has_exp:
+            exp_data = df_het[df_het['experience_cat'] != 'Unknown'].groupby('experience_cat')['abs_effect'].agg(['mean','sem']).reset_index()
+            
+            order_exp = ['Junior', 'Mid', 'Senior']
+            exp_data['experience_cat'] = pd.Categorical(exp_data['experience_cat'], categories=order_exp, ordered=True)
+            exp_data = exp_data.sort_values('experience_cat')
+            
+            x_pos = np.arange(len(exp_data))
+            colors = PALETTE_EXP[:len(exp_data)]
+            
+            ax2.bar(x_pos, exp_data['mean'], yerr=exp_data['sem']*1.96,
+                   color=colors, alpha=0.9, width=BAR_WIDTH, 
+                   capsize=CAP_SIZE, error_kw={'ecolor': C_GRAY, 'lw': ERR_LW}, zorder=2)
+            
+            format_ax(ax2, "Experience", "")
+            ax2.tick_params(left=False)
+            ax2.set_xticks(x_pos)
+            ax2.set_xticklabels(exp_data['experience_cat'])
+        else:
+            ax2.axis('off')
+
+        # --- PANEL 3: PARTY SIZE (Blues) ---
+        # Order: Minor -> Medium -> Major
+        ax3 = axes[2]
+        if has_size:
+            size_data = df_het[df_het['party_size_cat'] != 'Unknown'].groupby('party_size_cat')['abs_effect'].agg(['mean','sem']).reset_index()
+            
+            order_size = ['Minor', 'Medium', 'Major']
+            size_data['party_size_cat'] = pd.Categorical(size_data['party_size_cat'], categories=order_size, ordered=True)
+            size_data = size_data.sort_values('party_size_cat')
+            
+            x_pos = np.arange(len(size_data))
+            colors = PALETTE_SIZE[:len(size_data)]
+            
+            ax3.bar(x_pos, size_data['mean'], yerr=size_data['sem']*1.96,
+                   color=colors, alpha=0.9, width=BAR_WIDTH, 
+                   capsize=CAP_SIZE, error_kw={'ecolor': C_GRAY, 'lw': ERR_LW}, zorder=2)
+            
+            format_ax(ax3, "Destination Party Size", "")
+            ax3.tick_params(left=False)
+            ax3.set_xticks(x_pos)
+            ax3.set_xticklabels(size_data['party_size_cat'])
+        else:
+            ax3.axis('off')
+
+        plt.tight_layout()
+        if save_dir: plt.savefig(os.path.join(save_dir, 'fig3b_heterogeneity_bars.png'), dpi=300)
+        plt.show()
+        print("✅ Figure 3B (Themed Bars) saved.")
+
+    # ========================================================================
+    # FIGURE 4: WITHIN-BLOC VS CROSS-BLOC (STANDALONE)
+    # ========================================================================
+    if 'within_bloc' in section3_stats:
+        wb = section3_stats['within_bloc']
+        if wb['status'] == 'Complete' and wb['plot_data_within'] is not None:
+            fig, ax = plt.subplots(figsize=(9, 5))
+            
+            ax.axhline(0, color=C_GRAY, ls='-', lw=0.8, alpha=0.5, zorder=1)
+            ax.axvline(0, color='#DB444B', ls='--', lw=0.8, zorder=1) # Red switch line
+
+            def add_ref_point(df_in):
+                df = df_in.copy()
+                if -1 not in df['time'].values:
+                    ref = pd.DataFrame({'time': [-1], 'coef': [0.0], 'se': [0.0], 'lower': [0.0], 'upper': [0.0]})
+                    df = pd.concat([df, ref]).sort_values('time')
+                    if 'lower' not in df.columns:
+                        df['lower'] = df['coef'] - 1.96 * df['se']
+                        df['upper'] = df['coef'] + 1.96 * df['se']
+                return df
+
+            plot_wb = add_ref_point(wb['plot_data_within'])
+            plot_cb = add_ref_point(wb['plot_data_cross'])
+            
+            # Using Economist Yellow for Within, Blue for Cross
+            C_WITHIN = '#EBB434' 
+            C_CROSS  = '#006BA2' 
+
+            ax.plot(plot_wb['time'], plot_wb['coef'], 'o-', lw=1.5, ms=5, color=C_WITHIN, 
+                    label=f'Within-Bloc (N={wb["n_within"]:,})', zorder=3)
+            if 'se' in plot_wb.columns:
+                ax.fill_between(plot_wb['time'], plot_wb['lower'], plot_wb['upper'], 
+                                alpha=0.15, color=C_WITHIN, lw=0, zorder=2)
+            
+            ax.plot(plot_cb['time'], plot_cb['coef'], 's-', lw=1.5, ms=5, color=C_CROSS, 
+                    label=f'Cross-Bloc (N={wb["n_cross"]:,})', zorder=3)
+            if 'se' in plot_cb.columns:
+                ax.fill_between(plot_cb['time'], plot_cb['lower'], plot_cb['upper'], 
+                                alpha=0.15, color=C_CROSS, lw=0, zorder=2)
+            
+            format_ax(ax, "Bimesters from Switch", "Effect on P(Old Party)")
+            ax.legend(frameon=False, loc='best')
+            
+            if not pd.isna(wb['peak_within']) and not pd.isna(wb['peak_cross']):
+                ratio = abs(wb['peak_cross']) / (abs(wb['peak_within']) + 1e-9)
+                txt = (f"Peak Ratio: {ratio:.1f}x\n"
+                       f"Cross: {wb['peak_cross']:.3f}\n"
+                       f"Within: {wb['peak_within']:.3f}")
+                ax.text(0.05, 0.05, txt, transform=ax.transAxes, fontsize=9,
+                        va='bottom', ha='left',
+                        bbox=dict(boxstyle='square,pad=0.4', fc='#dcdcdc', alpha=0.3, ec='none'))
+
+            plt.tight_layout()
+            if save_dir: plt.savefig(os.path.join(save_dir, 'fig4_within_cross_bloc.png'), dpi=300)
+            plt.show()
+            print("✅ Figure 4 (Within vs Cross) saved.")
+
+# USAGE
+# =============================================================================
+generate_heterogeneity_and_bloc_plots(section4_stats, section3_stats, df_het, save_dir=save_dir)
 
 # %%
 # COVARIATE CONSISTENCY VERIFICATION
